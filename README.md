@@ -31,6 +31,10 @@ Optional environment variables:
 - `/spendings`
 - `/closetrip`
 
+Notes:
+- Use quotes for member names that contain commas, e.g. `"Alice, A",Bob`
+- `;` is reserved as command separator in `/addspending`
+
 ## Render deployment notes
 
 For Render, configure:

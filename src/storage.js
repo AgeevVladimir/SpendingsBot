@@ -83,6 +83,23 @@ function parseRows(content) {
   });
 }
 
+function parseSharedWithField(value) {
+  if (!value) {
+    return [];
+  }
+  if (value.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (error) {
+      return [];
+    }
+  }
+  return value.split('|');
+}
+
 function getStoragePath(chatId, dataDir = process.env.DATA_DIR || path.join(process.cwd(), 'data')) {
   return path.join(dataDir, `trip_${chatId}.csv`);
 }
@@ -101,7 +118,7 @@ async function readTrip(chatId, dataDir) {
         date: row.date,
         description: row.description,
         payer: row.payer,
-        sharedWith: row.sharedWith ? row.sharedWith.split('|') : []
+        sharedWith: parseSharedWithField(row.sharedWith)
       }));
 
     return {
@@ -195,12 +212,12 @@ async function addSpending(chatId, spending, dataDir) {
       throw new Error('Trip is already closed');
     }
 
+    if (spending.sharedWith.length === 0) {
+      throw new Error('At least one shared member is required');
+    }
     const unknownMembers = spending.sharedWith.filter((member) => !state.members.includes(member));
     if (!state.members.includes(spending.payer) || unknownMembers.length > 0) {
       throw new Error('All payer and shared members must be added first');
-    }
-    if (spending.sharedWith.length === 0) {
-      throw new Error('At least one shared member is required');
     }
 
     state.rows.push({
@@ -209,7 +226,7 @@ async function addSpending(chatId, spending, dataDir) {
       date: spending.date,
       description: spending.description,
       payer: spending.payer,
-      sharedWith: spending.sharedWith.join('|'),
+      sharedWith: JSON.stringify(spending.sharedWith),
       createdAt: new Date().toISOString()
     });
 

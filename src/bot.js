@@ -13,22 +13,11 @@ function getCommandArgs(text) {
 }
 
 function splitSpendingArguments(raw) {
-  const first = raw.indexOf(';');
-  const second = first === -1 ? -1 : raw.indexOf(';', first + 1);
-  const last = raw.lastIndexOf(';');
-  const beforeLast = last === -1 ? -1 : raw.lastIndexOf(';', last - 1);
-
-  if (first === -1 || second === -1 || beforeLast === -1 || last === -1) {
+  const parts = raw.split(';').map((part) => part.trim());
+  if (parts.length !== 5) {
     return null;
   }
-
-  return [
-    raw.slice(0, first).trim(),
-    raw.slice(first + 1, second).trim(),
-    raw.slice(second + 1, beforeLast).trim(),
-    raw.slice(beforeLast + 1, last).trim(),
-    raw.slice(last + 1).trim()
-  ];
+  return parts;
 }
 
 function isValidIsoDate(value) {
@@ -45,6 +34,43 @@ function isValidIsoDate(value) {
   );
 }
 
+function parseSharedMembers(sharedRaw) {
+  const members = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < sharedRaw.length; i += 1) {
+    const ch = sharedRaw[i];
+    if (ch === '"') {
+      if (inQuotes && sharedRaw[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === ',' && !inQuotes) {
+      if (current.trim()) {
+        members.push(current.trim());
+      }
+      current = '';
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (inQuotes) {
+    return null;
+  }
+  if (current.trim()) {
+    members.push(current.trim());
+  }
+  return members;
+}
+
 function createBot(token) {
   const bot = new Telegraf(token);
 
@@ -57,6 +83,7 @@ function createBot(token) {
         '/addmember <name>',
         '/members',
         '/addspending <amount>; <date YYYY-MM-DD>; <description>; <payer>; <shared1,shared2>',
+        'Use quotes for names with commas, e.g. "Alice, A",Bob',
         '/spendings',
         '/closetrip'
       ].join('\n')
@@ -120,7 +147,10 @@ function createBot(token) {
       return ctx.reply('Amount must be a positive number in EUR with up to 2 decimals.');
     }
     const amountEur = Number(amountRaw);
-    const sharedWith = sharedRaw.split(',').map((member) => member.trim()).filter(Boolean);
+    const sharedWith = parseSharedMembers(sharedRaw);
+    if (!sharedWith) {
+      return ctx.reply('Shared members list has invalid quotes.');
+    }
 
     if (!Number.isFinite(amountEur) || amountEur <= 0) {
       return ctx.reply('Amount must be a positive number in EUR.');
@@ -189,5 +219,11 @@ function createBot(token) {
 }
 
 module.exports = {
-  createBot
+  createBot,
+  _test: {
+    getCommandArgs,
+    splitSpendingArguments,
+    isValidIsoDate,
+    parseSharedMembers
+  }
 };
