@@ -94,7 +94,7 @@ function parseSharedWithField(value) {
         return parsed;
       }
     } catch (error) {
-      return [];
+      throw new Error('Invalid sharedWith data in storage');
     }
   }
   return value.split('|');

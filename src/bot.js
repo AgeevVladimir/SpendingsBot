@@ -143,7 +143,7 @@ function createBot(token) {
     }
 
     const [amountRaw, date, description, payer, sharedRaw] = parts;
-    if (!/^\d+(\.\d{1,2})?$/.test(amountRaw)) {
+    if (!/^(?:0\.(?:0?[1-9]|[1-9]\d)|[1-9]\d*(?:\.\d{1,2})?)$/.test(amountRaw)) {
       return ctx.reply('Amount must be a positive number in EUR with up to 2 decimals.');
     }
     const amountEur = Number(amountRaw);

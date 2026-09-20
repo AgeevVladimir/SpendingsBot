@@ -24,5 +24,6 @@ test('isValidIsoDate validates real calendar dates', () => {
 
 test('parseSharedMembers supports quoted commas', () => {
   assert.deepEqual(_test.parseSharedMembers('"Alice, A",Bob'), ['Alice, A', 'Bob']);
+  assert.deepEqual(_test.parseSharedMembers('"Alice ""The A"" , A",Bob'), ['Alice "The A" , A', 'Bob']);
   assert.equal(_test.parseSharedMembers('"Alice,Bob'), null);
 });
