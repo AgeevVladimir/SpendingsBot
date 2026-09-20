@@ -59,3 +59,45 @@ test('trip data is persisted in csv and closed', async () => {
   const afterClose = await readTrip(1, dir);
   assert.equal(afterClose.trip.closed, true);
 });
+
+test('csv storage supports commas and quotes', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spendingsbot-'));
+
+  await createTrip(2, 'Weekend, "City"', dir);
+  await addMember(2, 'Alice, "A"', dir);
+  await addMember(2, 'Bob', dir);
+  await addSpending(2, {
+    amountEur: 12.5,
+    date: '2026-09-20',
+    description: 'Dinner, "Pasta"',
+    payer: 'Alice, "A"',
+    sharedWith: ['Alice, "A"', 'Bob']
+  }, dir);
+
+  const state = await readTrip(2, dir);
+  assert.equal(state.trip.name, 'Weekend, "City"');
+  assert.deepEqual(state.members, ['Alice, "A"', 'Bob']);
+  assert.equal(state.spendings[0].description, 'Dinner, "Pasta"');
+});
+
+test('createTrip does not overwrite existing trip and multiline values are rejected', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spendingsbot-'));
+
+  await createTrip(3, 'Trip', dir);
+  await assert.rejects(() => createTrip(3, 'Another', dir), /Trip already exists/);
+
+  await addMember(3, 'Alice', dir);
+  await assert.rejects(
+    () => addMember(3, 'Bob\nB', dir),
+    /Multiline values are not supported/
+  );
+});
+
+test('closeTrip cannot run twice', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'spendingsbot-'));
+
+  await createTrip(4, 'Trip', dir);
+  await addMember(4, 'Alice', dir);
+  await closeTrip(4, dir);
+  await assert.rejects(() => closeTrip(4, dir), /Trip is already closed/);
+});

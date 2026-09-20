@@ -1,5 +1,6 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const writeLocks = new Map();
 
 const HEADER = [
   'recordType',
@@ -16,6 +17,9 @@ const HEADER = [
 
 function escapeCsvValue(value) {
   const text = String(value ?? '');
+  if (text.includes('\n') || text.includes('\r')) {
+    throw new Error('Multiline values are not supported in CSV storage');
+  }
   if (text.includes(',') || text.includes('"') || text.includes('\n')) {
     return `"${text.replace(/"/g, '""')}"`;
   }
@@ -125,65 +129,87 @@ async function writeRows(storagePath, rows) {
   await fs.writeFile(storagePath, serializeRows(rows), 'utf8');
 }
 
-async function createTrip(chatId, name, dataDir) {
-  const { storagePath } = await readTrip(chatId, dataDir);
-  const rows = [
-    {
-      recordType: 'trip',
-      tripName: name,
-      closed: 'false',
-      createdAt: new Date().toISOString()
+function withChatLock(chatId, operation) {
+  const key = String(chatId);
+  const previous = writeLocks.get(key) || Promise.resolve();
+  const run = previous.then(operation);
+  const tail = run.catch(() => {});
+  writeLocks.set(key, tail);
+  return run.finally(() => {
+    if (writeLocks.get(key) === tail) {
+      writeLocks.delete(key);
     }
-  ];
-  await writeRows(storagePath, rows);
+  });
+}
+
+async function createTrip(chatId, name, dataDir) {
+  await withChatLock(chatId, async () => {
+    const { storagePath, trip } = await readTrip(chatId, dataDir);
+    if (trip) {
+      throw new Error('Trip already exists for this chat');
+    }
+    const rows = [
+      {
+        recordType: 'trip',
+        tripName: name,
+        closed: 'false',
+        createdAt: new Date().toISOString()
+      }
+    ];
+    await writeRows(storagePath, rows);
+  });
 }
 
 async function addMember(chatId, memberName, dataDir) {
-  const state = await readTrip(chatId, dataDir);
-  if (!state.trip) {
-    throw new Error('Trip is not created');
-  }
-  if (state.trip.closed) {
-    throw new Error('Trip is already closed');
-  }
-  if (state.members.includes(memberName)) {
-    throw new Error(`Member ${memberName} already exists`);
-  }
+  await withChatLock(chatId, async () => {
+    const state = await readTrip(chatId, dataDir);
+    if (!state.trip) {
+      throw new Error('Trip is not created');
+    }
+    if (state.trip.closed) {
+      throw new Error('Trip is already closed');
+    }
+    if (state.members.includes(memberName)) {
+      throw new Error(`Member ${memberName} already exists`);
+    }
 
-  state.rows.push({
-    recordType: 'member',
-    member: memberName,
-    createdAt: new Date().toISOString()
+    state.rows.push({
+      recordType: 'member',
+      member: memberName,
+      createdAt: new Date().toISOString()
+    });
+
+    await writeRows(state.storagePath, state.rows);
   });
-
-  await writeRows(state.storagePath, state.rows);
 }
 
 async function addSpending(chatId, spending, dataDir) {
-  const state = await readTrip(chatId, dataDir);
-  if (!state.trip) {
-    throw new Error('Trip is not created');
-  }
-  if (state.trip.closed) {
-    throw new Error('Trip is already closed');
-  }
+  await withChatLock(chatId, async () => {
+    const state = await readTrip(chatId, dataDir);
+    if (!state.trip) {
+      throw new Error('Trip is not created');
+    }
+    if (state.trip.closed) {
+      throw new Error('Trip is already closed');
+    }
 
-  const unknownMembers = spending.sharedWith.filter((member) => !state.members.includes(member));
-  if (!state.members.includes(spending.payer) || unknownMembers.length > 0) {
-    throw new Error('All payer and shared members must be added first');
-  }
+    const unknownMembers = spending.sharedWith.filter((member) => !state.members.includes(member));
+    if (!state.members.includes(spending.payer) || unknownMembers.length > 0) {
+      throw new Error('All payer and shared members must be added first');
+    }
 
-  state.rows.push({
-    recordType: 'spending',
-    amountEur: spending.amountEur,
-    date: spending.date,
-    description: spending.description,
-    payer: spending.payer,
-    sharedWith: spending.sharedWith.join('|'),
-    createdAt: new Date().toISOString()
+    state.rows.push({
+      recordType: 'spending',
+      amountEur: spending.amountEur,
+      date: spending.date,
+      description: spending.description,
+      payer: spending.payer,
+      sharedWith: spending.sharedWith.join('|'),
+      createdAt: new Date().toISOString()
+    });
+
+    await writeRows(state.storagePath, state.rows);
   });
-
-  await writeRows(state.storagePath, state.rows);
 }
 
 function calculateSettlement(members, spendings) {
@@ -231,17 +257,22 @@ function calculateSettlement(members, spendings) {
 }
 
 async function closeTrip(chatId, dataDir) {
-  const state = await readTrip(chatId, dataDir);
-  if (!state.trip) {
-    throw new Error('Trip is not created');
-  }
+  return withChatLock(chatId, async () => {
+    const state = await readTrip(chatId, dataDir);
+    if (!state.trip) {
+      throw new Error('Trip is not created');
+    }
+    if (state.trip.closed) {
+      throw new Error('Trip is already closed');
+    }
 
-  const settlements = calculateSettlement(state.members, state.spendings);
-  const tripRow = state.rows.find((row) => row.recordType === 'trip');
-  tripRow.closed = 'true';
-  await writeRows(state.storagePath, state.rows);
+    const settlements = calculateSettlement(state.members, state.spendings);
+    const tripRow = state.rows.find((row) => row.recordType === 'trip');
+    tripRow.closed = 'true';
+    await writeRows(state.storagePath, state.rows);
 
-  return settlements;
+    return settlements;
+  });
 }
 
 module.exports = {

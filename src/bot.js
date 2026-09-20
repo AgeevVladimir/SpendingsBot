@@ -31,8 +31,12 @@ function createBot(token) {
       return ctx.reply('Usage: /newtrip <trip name>');
     }
 
-    await createTrip(ctx.chat.id, name);
-    return ctx.reply(`Trip "${name}" is created.`);
+    try {
+      await createTrip(ctx.chat.id, name);
+      return ctx.reply(`Trip "${name}" is created.`);
+    } catch (error) {
+      return ctx.reply(error.message);
+    }
   });
 
   bot.command('addmember', async (ctx) => {
