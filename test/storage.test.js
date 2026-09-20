@@ -101,3 +101,21 @@ test('closeTrip cannot run twice', async () => {
   await closeTrip(4, dir);
   await assert.rejects(() => closeTrip(4, dir), /Trip is already closed/);
 });
+
+test('calculateSettlement handles fractional split rounding', () => {
+  const result = calculateSettlement(
+    ['Alice', 'Bob', 'Charlie'],
+    [
+      {
+        amountEur: 10,
+        payer: 'Alice',
+        sharedWith: ['Alice', 'Bob', 'Charlie']
+      }
+    ]
+  );
+
+  assert.deepEqual(result, [
+    { from: 'Bob', to: 'Alice', amountEur: 3.33 },
+    { from: 'Charlie', to: 'Alice', amountEur: 3.33 }
+  ]);
+});

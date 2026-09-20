@@ -126,7 +126,9 @@ async function readTrip(chatId, dataDir) {
 
 async function writeRows(storagePath, rows) {
   await fs.mkdir(path.dirname(storagePath), { recursive: true });
-  await fs.writeFile(storagePath, serializeRows(rows), 'utf8');
+  const tempPath = `${storagePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tempPath, serializeRows(rows), 'utf8');
+  await fs.rename(tempPath, storagePath);
 }
 
 function withChatLock(chatId, operation) {
@@ -197,6 +199,9 @@ async function addSpending(chatId, spending, dataDir) {
     if (!state.members.includes(spending.payer) || unknownMembers.length > 0) {
       throw new Error('All payer and shared members must be added first');
     }
+    if (spending.sharedWith.length === 0) {
+      throw new Error('At least one shared member is required');
+    }
 
     state.rows.push({
       recordType: 'spending',
@@ -213,23 +218,33 @@ async function addSpending(chatId, spending, dataDir) {
 }
 
 function calculateSettlement(members, spendings) {
-  const balances = Object.fromEntries(members.map((member) => [member, 0]));
+  const balancesInCents = Object.fromEntries(members.map((member) => [member, 0]));
 
   for (const spending of spendings) {
-    const split = spending.amountEur / spending.sharedWith.length;
-    balances[spending.payer] += spending.amountEur;
+    if (!spending.sharedWith || spending.sharedWith.length === 0) {
+      throw new Error('Spending has empty shared members');
+    }
+    const amountInCents = Math.round(spending.amountEur * 100);
+    const splitBase = Math.floor(amountInCents / spending.sharedWith.length);
+    let remainder = amountInCents - splitBase * spending.sharedWith.length;
+
+    balancesInCents[spending.payer] += amountInCents;
     for (const member of spending.sharedWith) {
-      balances[member] -= split;
+      const share = splitBase + (remainder > 0 ? 1 : 0);
+      balancesInCents[member] -= share;
+      if (remainder > 0) {
+        remainder -= 1;
+      }
     }
   }
 
   const creditors = [];
   const debtors = [];
 
-  for (const [member, balance] of Object.entries(balances)) {
-    if (balance > 0.005) {
+  for (const [member, balance] of Object.entries(balancesInCents)) {
+    if (balance > 0) {
       creditors.push({ member, amount: balance });
-    } else if (balance < -0.005) {
+    } else if (balance < 0) {
       debtors.push({ member, amount: -balance });
     }
   }
@@ -243,14 +258,14 @@ function calculateSettlement(members, spendings) {
     settlements.push({
       from: debtors[i].member,
       to: creditors[j].member,
-      amountEur: Number(payment.toFixed(2))
+      amountEur: payment / 100
     });
 
     debtors[i].amount -= payment;
     creditors[j].amount -= payment;
 
-    if (debtors[i].amount <= 0.005) i += 1;
-    if (creditors[j].amount <= 0.005) j += 1;
+    if (debtors[i].amount === 0) i += 1;
+    if (creditors[j].amount === 0) j += 1;
   }
 
   return settlements;

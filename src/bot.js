@@ -7,6 +7,44 @@ const {
   readTrip
 } = require('./storage');
 
+function getCommandArgs(text) {
+  const firstSpace = text.indexOf(' ');
+  return firstSpace === -1 ? '' : text.slice(firstSpace + 1).trim();
+}
+
+function splitSpendingArguments(raw) {
+  const first = raw.indexOf(';');
+  const second = first === -1 ? -1 : raw.indexOf(';', first + 1);
+  const last = raw.lastIndexOf(';');
+  const beforeLast = last === -1 ? -1 : raw.lastIndexOf(';', last - 1);
+
+  if (first === -1 || second === -1 || beforeLast === -1 || last === -1) {
+    return null;
+  }
+
+  return [
+    raw.slice(0, first).trim(),
+    raw.slice(first + 1, second).trim(),
+    raw.slice(second + 1, beforeLast).trim(),
+    raw.slice(beforeLast + 1, last).trim(),
+    raw.slice(last + 1).trim()
+  ];
+}
+
+function isValidIsoDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return false;
+  }
+
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day
+  );
+}
+
 function createBot(token) {
   const bot = new Telegraf(token);
 
@@ -26,7 +64,7 @@ function createBot(token) {
   });
 
   bot.command('newtrip', async (ctx) => {
-    const name = ctx.message.text.replace('/newtrip', '').trim();
+    const name = getCommandArgs(ctx.message.text);
     if (!name) {
       return ctx.reply('Usage: /newtrip <trip name>');
     }
@@ -40,7 +78,7 @@ function createBot(token) {
   });
 
   bot.command('addmember', async (ctx) => {
-    const member = ctx.message.text.replace('/addmember', '').trim();
+    const member = getCommandArgs(ctx.message.text);
     if (!member) {
       return ctx.reply('Usage: /addmember <name>');
     }
@@ -54,26 +92,33 @@ function createBot(token) {
   });
 
   bot.command('members', async (ctx) => {
-    const state = await readTrip(ctx.chat.id);
-    if (!state.trip) {
-      return ctx.reply('Create a trip first with /newtrip');
-    }
+    try {
+      const state = await readTrip(ctx.chat.id);
+      if (!state.trip) {
+        return ctx.reply('Create a trip first with /newtrip');
+      }
 
-    if (state.members.length === 0) {
-      return ctx.reply('No members yet. Use /addmember');
-    }
+      if (state.members.length === 0) {
+        return ctx.reply('No members yet. Use /addmember');
+      }
 
-    return ctx.reply(`Members:\n${state.members.map((member) => `- ${member}`).join('\n')}`);
+      return ctx.reply(`Members:\n${state.members.map((member) => `- ${member}`).join('\n')}`);
+    } catch (error) {
+      return ctx.reply(error.message);
+    }
   });
 
   bot.command('addspending', async (ctx) => {
-    const raw = ctx.message.text.replace('/addspending', '').trim();
-    const parts = raw.split(';').map((part) => part.trim());
-    if (parts.length !== 5) {
+    const raw = getCommandArgs(ctx.message.text);
+    const parts = splitSpendingArguments(raw);
+    if (!parts) {
       return ctx.reply('Usage: /addspending <amount>; <date>; <description>; <payer>; <shared1,shared2>');
     }
 
     const [amountRaw, date, description, payer, sharedRaw] = parts;
+    if (!/^\d+(\.\d{1,2})?$/.test(amountRaw)) {
+      return ctx.reply('Amount must be a positive number in EUR with up to 2 decimals.');
+    }
     const amountEur = Number(amountRaw);
     const sharedWith = sharedRaw.split(',').map((member) => member.trim()).filter(Boolean);
 
@@ -81,7 +126,7 @@ function createBot(token) {
       return ctx.reply('Amount must be a positive number in EUR.');
     }
 
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    if (!isValidIsoDate(date)) {
       return ctx.reply('Date must be in format YYYY-MM-DD.');
     }
 
@@ -104,20 +149,24 @@ function createBot(token) {
   });
 
   bot.command('spendings', async (ctx) => {
-    const state = await readTrip(ctx.chat.id);
-    if (!state.trip) {
-      return ctx.reply('Create a trip first with /newtrip');
+    try {
+      const state = await readTrip(ctx.chat.id);
+      if (!state.trip) {
+        return ctx.reply('Create a trip first with /newtrip');
+      }
+
+      if (state.spendings.length === 0) {
+        return ctx.reply('No spendings yet.');
+      }
+
+      const lines = state.spendings.map((spending, index) => (
+        `${index + 1}. ${spending.date} - €${spending.amountEur.toFixed(2)} - ${spending.description} (paid by ${spending.payer}, shared: ${spending.sharedWith.join(', ')})`
+      ));
+
+      return ctx.reply(lines.join('\n'));
+    } catch (error) {
+      return ctx.reply(error.message);
     }
-
-    if (state.spendings.length === 0) {
-      return ctx.reply('No spendings yet.');
-    }
-
-    const lines = state.spendings.map((spending, index) => (
-      `${index + 1}. ${spending.date} - €${spending.amountEur.toFixed(2)} - ${spending.description} (paid by ${spending.payer}, shared: ${spending.sharedWith.join(', ')})`
-    ));
-
-    return ctx.reply(lines.join('\n'));
   });
 
   bot.command('closetrip', async (ctx) => {
