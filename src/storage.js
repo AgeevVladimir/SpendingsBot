@@ -93,6 +93,7 @@ function parseSharedWithField(value) {
       if (Array.isArray(parsed)) {
         return parsed;
       }
+      throw new Error('Invalid sharedWith data in storage');
     } catch (error) {
       throw new Error('Invalid sharedWith data in storage');
     }

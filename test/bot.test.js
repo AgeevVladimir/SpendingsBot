@@ -16,6 +16,13 @@ test('splitSpendingArguments requires exactly five fields', () => {
   );
 });
 
+test('splitSpendingArguments treats semicolon as reserved separator', () => {
+  assert.equal(
+    _test.splitSpendingArguments('10; 2026-09-20; Dinner; late; Alice; Bob'),
+    null
+  );
+});
+
 test('isValidIsoDate validates real calendar dates', () => {
   assert.equal(_test.isValidIsoDate('2026-02-28'), true);
   assert.equal(_test.isValidIsoDate('2026-02-31'), false);

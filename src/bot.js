@@ -13,6 +13,10 @@ function getCommandArgs(text) {
 }
 
 function splitSpendingArguments(raw) {
+  const separatorCount = (raw.match(/;/g) || []).length;
+  if (separatorCount !== 4) {
+    return null;
+  }
   const parts = raw.split(';').map((part) => part.trim());
   if (parts.length !== 5) {
     return null;
@@ -139,7 +143,7 @@ function createBot(token) {
     const raw = getCommandArgs(ctx.message.text);
     const parts = splitSpendingArguments(raw);
     if (!parts) {
-      return ctx.reply('Usage: /addspending <amount>; <date>; <description>; <payer>; <shared1,shared2>');
+      return ctx.reply('Usage: /addspending <amount>; <date>; <description>; <payer>; <shared1,shared2> (semicolon is reserved as separator)');
     }
 
     const [amountRaw, date, description, payer, sharedRaw] = parts;
