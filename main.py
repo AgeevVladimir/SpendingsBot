@@ -12,6 +12,7 @@ def main() -> None:
         trips_worksheet=settings.google_sheets_trips_worksheet,
         members_worksheet=settings.google_sheets_members_worksheet,
         spendings_worksheet=settings.google_sheets_spendings_worksheet,
+        allow_memory_fallback=settings.allow_in_memory_fallback,
     )
     repository.ensure_schema()
 

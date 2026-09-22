@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from threading import Lock
 from typing import Iterator
 
@@ -76,11 +77,13 @@ class SpendingsRepository:
         trips_worksheet: str = 'trips',
         members_worksheet: str = 'members',
         spendings_worksheet: str = 'spendings',
+        allow_memory_fallback: bool = False,
     ) -> None:
         self.workbook = workbook
         self.trips_worksheet = trips_worksheet
         self.members_worksheet = members_worksheet
         self.spendings_worksheet = spendings_worksheet
+        self.allow_memory_fallback = allow_memory_fallback
         self._locks: dict[str, Lock] = {}
         self._locks_guard = Lock()
         self._memory_rows: dict[str, list[dict[str, str]]] = {
@@ -108,6 +111,8 @@ class SpendingsRepository:
         try:
             self.workbook.ensure_worksheet(self.spendings_worksheet, SPENDINGS_HEADERS)
         except Exception:
+            if not self.allow_memory_fallback:
+                raise
             self._memory_rows.setdefault(self.spendings_worksheet, [])
 
     def _get_rows_from_store(self, title: str) -> list[dict[str, str]]:
@@ -115,14 +120,19 @@ class SpendingsRepository:
             rows = self.workbook.get_rows(title)
             if rows:
                 return rows
+            if not self.allow_memory_fallback:
+                return rows
         except Exception:
-            pass
+            if not self.allow_memory_fallback:
+                raise
         return [row.copy() for row in self._memory_rows.get(title, [])]
 
     def _replace_rows_in_store(self, title: str, headers: list[str], rows: list[dict[str, str]]) -> None:
         try:
             self.workbook.replace_rows(title, headers, rows)
         except Exception:
+            if not self.allow_memory_fallback:
+                raise
             self._memory_rows[title] = [
                 {header: str(row.get(header, '')) for header in headers}
                 for row in rows
@@ -132,6 +142,8 @@ class SpendingsRepository:
         try:
             self.workbook.append_row(title, headers, row)
         except Exception:
+            if not self.allow_memory_fallback:
+                raise
             self._memory_rows.setdefault(title, [])
             self._memory_rows[title].append({header: str(row.get(header, '')) for header in headers})
 
@@ -153,6 +165,15 @@ class SpendingsRepository:
             text = str(value)
             if '\n' in text or '\r' in text:
                 raise ValueError('Multiline values are not supported in storage')
+
+    @staticmethod
+    def _validate_spending(spending: Spending) -> None:
+        if not math.isfinite(spending.amount_eur) or spending.amount_eur <= 0:
+            raise ValueError('Amount must be a positive finite number')
+        try:
+            date.fromisoformat(spending.date)
+        except ValueError as error:
+            raise ValueError('Date must be in format YYYY-MM-DD') from error
 
     @staticmethod
     def _parse_shared_with_field(value: str) -> list[str]:
@@ -198,6 +219,7 @@ class SpendingsRepository:
     def add_spending(self, chat_id: int | str, spending: Spending) -> None:
         self.ensure_schema()
         self._validate_single_line(spending.description, spending.payer, *spending.shared_with)
+        self._validate_spending(spending)
         with self._chat_lock(chat_id):
             state = self.read_trip(chat_id)
             if not spending.shared_with:

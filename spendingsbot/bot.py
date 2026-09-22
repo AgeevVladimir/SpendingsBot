@@ -136,7 +136,13 @@ def _member_keyboard(members: list[str], selected: set[str] | None = None, payer
     return InlineKeyboardMarkup(rows)
 
 
-async def _reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup=None) -> None:
+async def _reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    text: str,
+    reply_markup=None,
+    preserve_in_history: bool = False,
+) -> None:
     if not update.effective_message:
         return
 
@@ -150,7 +156,10 @@ async def _reply(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, 
 
     target_markup = reply_markup if reply_markup is not None else _persistent_menu_keyboard()
     sent = await update.effective_message.reply_text(text, reply_markup=target_markup)
-    context.user_data['last_bot_message_id'] = sent.message_id
+    if preserve_in_history:
+        context.user_data.pop('last_bot_message_id', None)
+    else:
+        context.user_data['last_bot_message_id'] = sent.message_id
     message = update.message
     if message and message.from_user and not message.from_user.is_bot:
         try:
@@ -187,9 +196,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context,
         'How to use:\n'
         '1) Press ➕ Add spending\n'
-        '2) Enter amount\n'
-        '3) Enter description\n'
-        '4) Choose payer and shared members\n\n'
+        '2) Enter amount + description in one message (example: 200 restaurant 2 day)\n'
+        '3) Choose payer and shared members\n\n'
         'Commands:\n'
         '/start - show main menu\n'
         '/help - show this help\n'
@@ -556,7 +564,11 @@ async def _start_spending_wizard(update: Update, context: ContextTypes.DEFAULT_T
 
 
 async def _request_custom_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, context, 'Enter the amount in EUR, for example: 123.45')
+    await _reply(
+        update,
+        context,
+        'Enter amount and description in one message, for example: 200 restaurant 2 day',
+    )
     wizard = _wizard(context)
     wizard['amount'] = None
     wizard['payer'] = None
@@ -631,7 +643,12 @@ async def _finish_spending_wizard(update: Update, context: ContextTypes.DEFAULT_
                 shared_with=sorted(selected),
             ),
         )
-        await _reply(update, context, f'Spending saved: €{float(amount):.2f} | {description} | payer: {payer} | shared: {", ".join(sorted(selected))}')
+        await _reply(
+            update,
+            context,
+            f'Spending saved: €{float(amount):.2f} | {description} | payer: {payer} | shared: {", ".join(sorted(selected))}',
+            preserve_in_history=True,
+        )
         _clear_wizard(context)
     except ValueError as error:
         await _reply(update, context, str(error))
@@ -785,14 +802,29 @@ async def handle_manual_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     text = update.effective_message.text.strip()
-    if not re.fullmatch(r'\d+(?:\.\d{1,2})?', text):
-        await _reply(update, context, 'Please enter a valid amount, for example: 123 or 123.45')
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await _reply(update, context, 'Please enter amount and description, for example: 200 restaurant 2 day')
+        return
+
+    amount_raw, description = parts[0], parts[1].strip()
+    if not re.fullmatch(r'\d+(?:\.\d{1,2})?', amount_raw):
+        await _reply(update, context, 'Please enter a valid amount first, for example: 200 dinner')
+        return
+    amount = float(amount_raw)
+    if amount <= 0:
+        await _reply(update, context, 'Amount must be greater than zero.')
+        return
+    if not description or '\n' in description:
+        await _reply(update, context, 'Please add a short single-line description after the amount.')
         return
 
     wizard = _wizard(context)
-    wizard['amount'] = float(text)
+    wizard['amount'] = amount
+    wizard['description'] = description
     wizard['awaiting_amount'] = False
-    await _request_description(update, context)
+    wizard['awaiting_description'] = False
+    await _select_payer(update, context)
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -802,17 +834,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     wizard = context.user_data.get('spending_wizard', {})
     if wizard.get('awaiting_amount'):
         await handle_manual_amount(update, context)
-        return
-    if wizard.get('awaiting_description'):
-        if not update.effective_message or not update.effective_message.text:
-            return
-        description = update.effective_message.text.strip()
-        if not description or '\n' in description:
-            await _reply(update, context, 'Please enter a short single-line description.')
-            return
-        wizard['description'] = description
-        wizard['awaiting_description'] = False
-        await _select_payer(update, context)
         return
 
     text = update.effective_message.text.strip()

@@ -158,7 +158,7 @@ class FailingWorkbook(Workbook):
 
 
 def test_repository_uses_memory_fallback_when_workbook_fails() -> None:
-    repository = SpendingsRepository(FailingWorkbook())
+    repository = SpendingsRepository(FailingWorkbook(), allow_memory_fallback=True)
 
     payer = DEFAULT_MEMBER_NAMES[0]
     participant = DEFAULT_MEMBER_NAMES[1]
@@ -196,7 +196,7 @@ class ReadOnlyEmptyWorkbook(Workbook):
 
 
 def test_repository_prefers_memory_rows_when_store_reads_empty() -> None:
-    repository = SpendingsRepository(ReadOnlyEmptyWorkbook())
+    repository = SpendingsRepository(ReadOnlyEmptyWorkbook(), allow_memory_fallback=True)
 
     repository.ensure_default_trip(10, 'Сицилия 2026', ['Колян', 'Аня Д'])
     state = repository.read_trip(10)
@@ -326,3 +326,37 @@ def test_summarize_spendings_payments_scope_filters_only_payer(repository: Spend
     assert payments['total_eur'] == 50
     assert payments['spendings'][0].description == 'Dinner'
     assert personal['count'] == 2
+
+
+def test_add_spending_rejects_invalid_amount(repository: SpendingsRepository) -> None:
+    payer = DEFAULT_MEMBER_NAMES[0]
+    participant = DEFAULT_MEMBER_NAMES[1]
+
+    with pytest.raises(ValueError, match='positive finite'):
+        repository.add_spending(
+            12,
+            Spending(
+                amount_eur=0,
+                date='2026-09-20',
+                description='Bad amount',
+                payer=payer,
+                shared_with=[payer, participant],
+            ),
+        )
+
+
+def test_add_spending_rejects_invalid_date(repository: SpendingsRepository) -> None:
+    payer = DEFAULT_MEMBER_NAMES[0]
+    participant = DEFAULT_MEMBER_NAMES[1]
+
+    with pytest.raises(ValueError, match='YYYY-MM-DD'):
+        repository.add_spending(
+            13,
+            Spending(
+                amount_eur=10,
+                date='20-09-2026',
+                description='Bad date',
+                payer=payer,
+                shared_with=[payer, participant],
+            ),
+        )
