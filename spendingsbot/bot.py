@@ -104,6 +104,10 @@ def _person_picker_keyboard(members: list[str], mode: str) -> InlineKeyboardMark
     return InlineKeyboardMarkup(rows)
 
 
+def _cancel_only_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton('✖️ Cancel', callback_data='wizard:cancel')]])
+
+
 def _member_keyboard(members: list[str], selected: set[str] | None = None, payer_mode: bool = False) -> InlineKeyboardMarkup:
     selected = selected or set()
     rows: list[list[InlineKeyboardButton]] = []
@@ -143,25 +147,29 @@ async def _reply(
     reply_markup=None,
     preserve_in_history: bool = False,
 ) -> None:
-    if not update.effective_message:
+    if not update.effective_chat:
         return
 
-    if update.effective_chat:
-        previous_id = context.user_data.get('last_bot_message_id')
-        if previous_id:
-            try:
-                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=int(previous_id))
-            except Exception:
-                pass
+    previous_id = context.user_data.get('last_bot_message_id')
+    if previous_id:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=int(previous_id))
+        except Exception:
+            pass
 
     target_markup = reply_markup if reply_markup is not None else _persistent_menu_keyboard()
-    sent = await update.effective_message.reply_text(text, reply_markup=target_markup)
+    sent = await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=text,
+        reply_markup=target_markup,
+    )
     if preserve_in_history:
         context.user_data.pop('last_bot_message_id', None)
     else:
         context.user_data['last_bot_message_id'] = sent.message_id
+    preserve_user_message_once = bool(context.user_data.pop('preserve_user_message_once', False))
     message = update.message
-    if message and message.from_user and not message.from_user.is_bot:
+    if message and message.from_user and not message.from_user.is_bot and not preserve_user_message_once:
         try:
             await message.delete()
         except Exception:
@@ -457,7 +465,7 @@ async def _show_person_spendings(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     if not report['spendings']:
-        await _reply(update, context, f'No spendings for {member_name} yet.')
+        await _reply(update, context, f'No spendings for {member_name} yet.', preserve_in_history=True)
         return
 
     lines = [
@@ -469,6 +477,7 @@ async def _show_person_spendings(update: Update, context: ContextTypes.DEFAULT_T
         update,
         context,
         f'Personal spendings: {member_name}\n' + '\n'.join(lines) + f'\n\nTOTAL: €{report["total_eur"]:.2f}',
+        preserve_in_history=True,
     )
 
 
@@ -483,7 +492,7 @@ async def _show_person_payments(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if not report['spendings']:
-        await _reply(update, context, f'No payments by {member_name} yet.')
+        await _reply(update, context, f'No payments by {member_name} yet.', preserve_in_history=True)
         return
 
     lines = [
@@ -495,6 +504,7 @@ async def _show_person_payments(update: Update, context: ContextTypes.DEFAULT_TY
         update,
         context,
         f'Personal payments: {member_name}\n' + '\n'.join(lines) + f'\n\nTOTAL PAID: €{report["total_eur"]:.2f}',
+        preserve_in_history=True,
     )
 
 
@@ -542,11 +552,11 @@ async def _show_report(update: Update, context: ContextTypes.DEFAULT_TYPE, scope
 
     if not report['spendings']:
         if scope == 'today':
-            await _reply(update, context, 'No spendings for today.')
+            await _reply(update, context, 'No spendings for today.', preserve_in_history=True)
         elif scope == 'my':
-            await _reply(update, context, f'No spendings for {member_name} yet.')
+            await _reply(update, context, f'No spendings for {member_name} yet.', preserve_in_history=True)
         else:
-            await _reply(update, context, 'No spendings yet.')
+            await _reply(update, context, 'No spendings yet.', preserve_in_history=True)
         return
 
     lines = [
@@ -555,7 +565,12 @@ async def _show_report(update: Update, context: ContextTypes.DEFAULT_TYPE, scope
         for index, spending in enumerate(report['spendings'], start=1)
     ]
     title = 'Today spendings' if scope == 'today' else 'Personal spendings' if scope == 'my' else 'All spendings'
-    await _reply(update, context, f'{title}:\n' + '\n'.join(lines) + f'\n\nTOTAL: €{report["total_eur"]:.2f}')
+    await _reply(
+        update,
+        context,
+        f'{title}:\n' + '\n'.join(lines) + f'\n\nTOTAL: €{report["total_eur"]:.2f}',
+        preserve_in_history=True,
+    )
 
 
 async def _start_spending_wizard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -568,6 +583,7 @@ async def _request_custom_amount(update: Update, context: ContextTypes.DEFAULT_T
         update,
         context,
         'Enter amount and description in one message, for example: 200 restaurant 2 day',
+        reply_markup=_cancel_only_keyboard(),
     )
     wizard = _wizard(context)
     wizard['amount'] = None
@@ -802,6 +818,10 @@ async def handle_manual_amount(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     text = update.effective_message.text.strip()
+    if text.casefold() in {'cancel', 'отмена'}:
+        await cancel(update, context)
+        return
+
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
         await _reply(update, context, 'Please enter amount and description, for example: 200 restaurant 2 day')
@@ -824,7 +844,39 @@ async def handle_manual_amount(update: Update, context: ContextTypes.DEFAULT_TYP
     wizard['description'] = description
     wizard['awaiting_amount'] = False
     wizard['awaiting_description'] = False
+    context.user_data['preserve_user_message_once'] = True
     await _select_payer(update, context)
+
+
+def _parse_amount_description(text: str) -> tuple[float, str] | None:
+    parts = text.strip().split(maxsplit=1)
+    if len(parts) < 2:
+        return None
+
+    amount_raw, description = parts[0], parts[1].strip()
+    if not re.fullmatch(r'\d+(?:\.\d{1,2})?', amount_raw):
+        return None
+    amount = float(amount_raw)
+    if amount <= 0 or not description or '\n' in description:
+        return None
+    return amount, description
+
+
+async def _capture_spending_from_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> bool:
+    parsed = _parse_amount_description(text)
+    if parsed is None:
+        return False
+
+    await _ensure_default_trip(update, context)
+    amount, description = parsed
+    wizard = _wizard(context)
+    wizard['amount'] = amount
+    wizard['description'] = description
+    wizard['awaiting_amount'] = False
+    wizard['awaiting_description'] = False
+    context.user_data['preserve_user_message_once'] = True
+    await _select_payer(update, context)
+    return True
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -837,6 +889,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     text = update.effective_message.text.strip()
+    if text.casefold() in {'cancel', 'отмена'}:
+        await cancel(update, context)
+        return
+
+    if await _capture_spending_from_text(update, context, text):
+        return
+
     if text == MENU_ADD_SPENDING:
         await _start_spending_wizard(update, context)
         return
@@ -901,4 +960,9 @@ async def _show_settlement(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f'{settlement.from_member} owes {settlement.to_member} €{settlement.amount_eur:.2f}'
         for settlement in settlements
     ]
-    await _reply(update, context, 'Current balances:\n' + '\n'.join(lines) + '\n\nSettle up:\n' + '\n'.join(settlement_lines))
+    await _reply(
+        update,
+        context,
+        'Current balances:\n' + '\n'.join(lines) + '\n\nSettle up:\n' + '\n'.join(settlement_lines),
+        preserve_in_history=True,
+    )
